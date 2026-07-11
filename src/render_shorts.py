@@ -46,3 +46,24 @@ def parse_args():
 
     return parser.parse_args()
 
+#saving records for rendered shorts previews
+def connect_database(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS shorts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        output_path TEXT NOT NULL,
+        topic TEXT,
+        clip_count INTEGER NOT NULL,
+        target_duration_seconds REAL,
+        status TEXT DEFAULT 'preview',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    """)
+
+    conn.commit()
+    return conn

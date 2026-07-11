@@ -67,3 +67,43 @@ def connect_database(path: Path):
 
     conn.commit()
     return conn
+
+#fetching clips from the database that is needed
+def fetch_clips(conn, topic, limit):
+    cursor = conn.cursor()
+
+    if topic is None:
+        # No topic filter → fetch all ingested clips
+        cursor.execute("""
+        SELECT id, file_path, duration_seconds, width, height, fps, topic
+        FROM clips
+        WHERE status = 'ingested'
+        LIMIT ?
+        """, (limit,))
+    else:
+        # Filter by topic if provided
+        cursor.execute("""
+        SELECT id, file_path, duration_seconds, width, height, fps, topic
+        FROM clips
+        WHERE status = 'ingested'
+        AND topic = ?
+        LIMIT ?
+        """, (topic, limit))
+
+    rows = cursor.fetchall()
+
+    clips = []
+    for row in rows:
+        clips.append({
+            "id": row[0],
+            "file_path": row[1],
+            "duration_seconds": row[2],
+            "width": row[3],
+            "height": row[4],
+            "fps": row[5],
+            "topic": row[6]
+        })
+
+    return clips
+
+

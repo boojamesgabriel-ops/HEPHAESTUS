@@ -2,6 +2,8 @@ import argparse
 import sqlite3
 import subprocess
 import tempfile
+import os
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -106,4 +108,19 @@ def fetch_clips(conn, topic, limit):
 
     return clips
 
+#handles running the ffmpeg (generic runner)
+def run_ffmpeg(command):
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"FFmpeg failed: {result.stderr.strip()}")
+    return result
 
+def render_short():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        filepath = os.path.join(tmpdir, "tmp.txt")
+
+        with open(filepath,"w") as f:
+            f.write("sample")
+
+        with open(filepath, "r") as r:
+            print(r.read())

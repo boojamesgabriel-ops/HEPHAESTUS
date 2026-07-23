@@ -3,6 +3,7 @@ import sqlite3
 import subprocess
 import tempfile
 import os
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -188,3 +189,21 @@ def concat_clips(concat_file, output_file):
     run_ffmpeg(command)
 
     return output_file
+
+def build_output_path(output_dir, topic):
+    output_dir = Path(output_dir)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    utc_time = datetime.now(timezone.utc)
+    timestamp = utc_time.strftime("%Y%m%d_%H%M%S")
+
+    if topic:
+        safe_name = re.sub(r'[<>:"/\\|?*\s]', "_", topic)
+        safe_name = re.sub(r'_+', "_", safe_name)
+        safe_name = safe_name.strip("_")
+        safe_name = f"{safe_name}_{timestamp}.mp4"
+    else:
+        safe_name = f"short_{timestamp}.mp4"
+
+    return output_dir / safe_name

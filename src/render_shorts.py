@@ -160,3 +160,13 @@ def normalize_clip(input_file, output_file,
 
     # Run the command
     return run_ffmpeg(command)
+
+
+def write_concat_file(clips, concat_file):
+    concat_file = Path(concat_file)
+
+    with concat_file.open("w", encoding="utf-8") as f:
+        for clip in clips:
+            f.write(f"file '{Path(clip)}'\n")
+
+    return concat_file

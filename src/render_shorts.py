@@ -170,3 +170,21 @@ def write_concat_file(clips, concat_file):
             f.write(f"file '{Path(clip)}'\n")
 
     return concat_file
+
+
+def concat_clips(concat_file, output_file):
+    concat_file = Path(concat_file)
+    output_file = Path(output_file)
+
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+
+    command = ["ffmpeg", "-y",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", str(concat_file),
+                "-c", "copy",
+                str(output_file)]
+    
+    run_ffmpeg(command)
+
+    return output_file

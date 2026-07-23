@@ -124,3 +124,39 @@ def render_short():
 
         with open(filepath, "r") as r:
             print(r.read())
+
+
+# High-level editor
+def normalize_clip(input_file, output_file,
+                   start_time=None, end_time=None, duration=None,
+                   crop=None, scale=None):
+    command = ["ffmpeg", "-y"]
+
+    # Trim
+    if start_time is not None:
+        command += ["-ss", str(start_time)]
+    command += ["-i", str(input_file)]
+    if duration is not None:
+        command += ["-t", str(duration)]
+    if end_time is not None:
+        command += ["-to", str(end_time)]
+
+    # Filters
+    filters = []
+    if crop:
+        w, h, x, y = crop
+        filters.append(f"crop={w}:{h}:{x}:{y}")
+    if scale:
+        sw, sh = scale
+        filters.append(f"scale={sw}:{sh}")
+    if filters:
+        command += ["-vf", ",".join(filters)]
+
+    # Normalize formats (audio and video)
+    command += ["-c:v", "libx264", "-c:a", "aac"]
+
+    # Output file
+    command.append(str(output_file))
+
+    # Run the command
+    return run_ffmpeg(command)

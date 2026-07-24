@@ -2,12 +2,11 @@ import argparse
 import sqlite3
 import subprocess
 import tempfile
-import os
 import re
-import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Parse command-line options for the render workflow.
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Render ingested clips into a preview Short."
@@ -49,7 +48,7 @@ def parse_args():
 
     return parser.parse_args()
 
-#saving records for rendered shorts previews
+# Connect to SQLite and ensure the shorts preview table exists.
 def connect_database(path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
@@ -71,7 +70,7 @@ def connect_database(path: Path):
     conn.commit()
     return conn
 
-#fetching clips from the database that is needed
+# Fetch ingested clips from the clips table, optionally filtered by topic.
 def fetch_clips(conn, topic, limit):
     cursor = conn.cursor()
 
@@ -109,28 +108,17 @@ def fetch_clips(conn, topic, limit):
 
     return clips
 
-#handles running the ffmpeg (generic runner)
+# Run an FFmpeg command and raise a clear error if it fails.
 def run_ffmpeg(command):
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(f"FFmpeg failed: {result.stderr.strip()}")
     return result
 
-def render_short():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        filepath = os.path.join(tmpdir, "tmp.txt")
-
-        with open(filepath,"w") as f:
-            f.write("sample")
-
-        with open(filepath, "r") as r:
-            print(r.read())
-
-
-# High-level editor
+# Normalize one clip by trimming, filtering, and converting video/audio formats.
 def normalize_clip(input_file, output_file,
                    start_time=None, end_time=None, duration=None,
-                   crop=None, scale=None):
+                   crop=None, scale=None, video_filter=None):
     command = ["ffmpeg", "-y"]
 
     # Trim
@@ -143,18 +131,29 @@ def normalize_clip(input_file, output_file,
         command += ["-to", str(end_time)]
 
     # Filters
-    filters = []
-    if crop:
-        w, h, x, y = crop
-        filters.append(f"crop={w}:{h}:{x}:{y}")
-    if scale:
-        sw, sh = scale
-        filters.append(f"scale={sw}:{sh}")
-    if filters:
-        command += ["-vf", ",".join(filters)]
+    if video_filter:
+        command += ["-vf", video_filter]
+    else:
+        filters = []
+        if crop:
+            w, h, x, y = crop
+            filters.append(f"crop={w}:{h}:{x}:{y}")
+        if scale:
+            sw, sh = scale
+            filters.append(f"scale={sw}:{sh}")
+        if filters:
+            command += ["-vf", ",".join(filters)]
 
-    # Normalize formats (audio and video)
-    command += ["-c:v", "libx264", "-c:a", "aac"]
+    # Normalize formats (audio and video) so concat can join clips reliably.
+    command += [
+        "-r", "30",
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
+        "-ar", "48000",
+        "-ac", "2",
+        "-movflags", "+faststart"
+    ]
 
     # Output file
     command.append(str(output_file))
@@ -162,7 +161,7 @@ def normalize_clip(input_file, output_file,
     # Run the command
     return run_ffmpeg(command)
 
-
+# Write FFmpeg concat-list text for the normalized clip files.
 def write_concat_file(clips, concat_file):
     concat_file = Path(concat_file)
 
@@ -172,7 +171,7 @@ def write_concat_file(clips, concat_file):
 
     return concat_file
 
-
+# Join normalized clips into one output video using FFmpeg concat mode.
 def concat_clips(concat_file, output_file):
     concat_file = Path(concat_file)
     output_file = Path(output_file)
@@ -190,6 +189,7 @@ def concat_clips(concat_file, output_file):
 
     return output_file
 
+# Build a timestamped output path for the rendered preview Short.
 def build_output_path(output_dir, topic):
     output_dir = Path(output_dir)
 
@@ -207,3 +207,125 @@ def build_output_path(output_dir, topic):
         safe_name = f"short_{timestamp}.mp4"
 
     return output_dir / safe_name
+
+# Render selected clips into one vertical preview Short.
+def render_short(clips, output_dir, topic, max_duration):
+    scale = (1080, 1920)
+    width, height = scale
+
+    if not clips:
+        raise RuntimeError("No clips available to render.")
+  
+    output_file = build_output_path(output_dir, topic)
+
+    duration_per_clip = max_duration / len(clips)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        temp_dir = Path(tmpdir)
+        normalized_clips = []
+
+        for index, clip in enumerate(clips):
+            input_file = Path(clip["file_path"])
+            temp_output = temp_dir / f"clip_{index}.mp4"
+
+            normalize_clip(
+                input_file,
+                temp_output,
+                duration=duration_per_clip,
+                video_filter=f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}"
+            )
+
+            normalized_clips.append(temp_output)
+
+        concat_file = temp_dir / "concat.txt"
+        write_concat_file(normalized_clips, concat_file)
+        concat_clips(concat_file, output_file)
+
+    return output_file
+
+# Save a rendered Short preview record into the shorts table.
+def insert_short_record(conn, output_path, topic, clip_count, target_duration_seconds):
+    cursor = conn.cursor()
+    now = datetime.now(timezone.utc).isoformat()
+
+    cursor.execute("""
+    INSERT INTO shorts (
+        output_path,
+        topic,
+        clip_count,
+        target_duration_seconds,
+        status,
+        created_at,
+        updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (
+        str(output_path),
+        topic,
+        clip_count,
+        target_duration_seconds,
+        "preview",
+        now,
+        now
+    ))
+
+    conn.commit()
+    return cursor.lastrowid
+
+# Split clips into existing files and missing file paths.
+def validate_clip_paths(clips):
+    valid_clips = []
+    missing_clips = []
+
+    for clip in clips:
+        path = Path(clip["file_path"])
+        if path.exists() and path.is_file():
+            valid_clips.append(clip)
+        else:
+            missing_clips.append(clip)
+    
+    return valid_clips, missing_clips
+
+# Run the full render workflow from CLI args to saved preview record.
+def main():
+    args = parse_args()
+    conn = connect_database(args.db)
+    try:
+        clips = fetch_clips(conn, args.topic, args.limit)
+        valid_clips, missing_clips = validate_clip_paths(clips)
+
+        if not valid_clips:
+            print("There are no valid clips to render.")
+            if missing_clips:
+                print("Missing clips:")
+                for clip in missing_clips:
+                    print(f"- {clip['file_path']}")
+            return
+
+        output_path = render_short(
+            valid_clips,
+            args.output,
+            args.topic,
+            args.max_duration
+        )
+
+        short_id = insert_short_record(
+            conn,
+            output_path,
+            args.topic,
+            len(valid_clips),
+            args.max_duration
+        )
+
+        print(f"Rendered Short ID: {short_id}")
+        print(f"Output: {output_path}")
+        print(f"Used clips: {len(valid_clips)}")
+        print(f"Missing clips skipped: {len(missing_clips)}")
+        if missing_clips:
+            print("Missing clips:")
+            for clip in missing_clips:
+                print(f"- {clip['file_path']}")
+    finally:
+        conn.close()
+
+if __name__ == "__main__":
+    main()
